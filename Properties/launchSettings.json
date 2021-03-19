@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "AnalyzeDotNetProject": {
+      "commandName": "Project",
+      "commandLineArgs": "\"C:\\Dev\\Azure DevOps\\OrcHack\\src\\Orchestration\\BluePrism.OrcHack.Orchestration.API\\Orchestration.API.csproj\" \"System.,Microsoft.\""
+    }
+  }
+}
