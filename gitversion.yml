@@ -1,0 +1,9 @@
+mode: ContinuousDeployment
+assembly-file-versioning-format: '{Major}.{Minor}.{Patch}.{env:BUILD_NUMBER ?? 0}'
+assembly-versioning-format: '{Major}.{Minor}.{Patch}.{env:BUILD_NUMBER ?? 0}'
+ignore:
+  sha: []
+branches:
+  # Generate alpha-branchname prerelease labels
+  feature:
+    tag: alpha-{BranchName}
