@@ -1,53 +1,97 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using CommandLine;
 using NuGet.ProjectModel;
 
 namespace AnalyzeDotNetProject
 {
     class Program
     {
-        private static string[] IgnoredPrefixes = new string[] {""};
+        private const int IndentWidth = 2;
 
         static void Main(string[] args)
         {
-            if (ShowHelp(args)) return;
+            Parser.Default.ParseArguments<CommandLineOptions>(args)
+                .WithParsed(Run)
+                .WithNotParsed(HandleArgsError);
+        }
 
-            string projectPath = args[0];
-            IgnoredPrefixes = args.Length > 1 ? args[1].Split(',', StringSplitOptions.RemoveEmptyEntries) : new string[] { };
-            
-            var dependencyGraphService = new DependencyGraphService();
-            var dependencyGraph = dependencyGraphService.GenerateDependencyGraph(projectPath);
-
-            foreach(var project in dependencyGraph.Projects.Where(p => p.RestoreMetadata.ProjectStyle == ProjectStyle.PackageReference))
+        private static void Run(CommandLineOptions options)
+        {
+            foreach (var entryPointProject in options.Projects)
             {
-                Console.WriteLine(project.Name);
+                string projectName = GetProjectNameFromPath(entryPointProject);
+                Console.WriteLine($"{GetIndent(options, 0)}{projectName}");
 
-                // Generate lock file
-                var lockFileService = new LockFileService();
-                var lockFile = lockFileService.GetLockFile(project.FilePath, project.RestoreMetadata.OutputPath);
-                if (lockFile != null)
+                var dependencyGraphService = new DependencyGraphService();
+                var dependencyGraph = dependencyGraphService.GenerateDependencyGraph(entryPointProject);
+                
+
+                foreach (var project in dependencyGraph.Projects.Where(p =>
+                    IncludeProject(options, p.Name)
+                    && p.RestoreMetadata.ProjectStyle == ProjectStyle.PackageReference))
                 {
-                    foreach (var targetFramework in project.TargetFrameworks)
+                    Console.WriteLine($"{GetIndent(options, 1)}{project.Name}");
+
+                    if (options.Level == DependencyLevel.Package)
                     {
-                        Console.WriteLine($"  [{targetFramework.FrameworkName}]");
+                        DisplayPackages(options, project, 2);
+                    }
+                }
+            }
+        }
 
-                        var lockFileTargetFramework = lockFile.Targets.FirstOrDefault(t =>
-                            t.TargetFramework.Equals(targetFramework.FrameworkName));
-                        if (lockFileTargetFramework != null)
+        private static string GetProjectNameFromPath(string projectPath)
+        {
+            return Path.GetFileNameWithoutExtension(projectPath);
+        }
+
+        private static void DisplayPackages(CommandLineOptions options, PackageSpec project, int indentLevel)
+        {
+            // Generate lock file
+            var lockFileService = new LockFileService();
+            var lockFile = lockFileService.GetLockFile(project.FilePath, project.RestoreMetadata.OutputPath);
+            if (lockFile != null)
+            {
+                foreach (var targetFramework in project.TargetFrameworks)
+                {
+                    string indent = GetIndent(options, indentLevel);
+                    Console.WriteLine($"{indent}[{targetFramework.FrameworkName}]");
+
+                    var lockFileTargetFramework = lockFile.Targets.FirstOrDefault(t =>
+                        t.TargetFramework.Equals(targetFramework.FrameworkName));
+                    if (lockFileTargetFramework != null)
+                    {
+                        foreach (var dependency in targetFramework.Dependencies.Where(
+                            x => IncludePackage(options, x.Name)))
                         {
-                            foreach (var dependency in targetFramework.Dependencies.Where(
-                                x => IncludeDependency(x.Name)))
-                            {
-                                var projectLibrary =
-                                    lockFileTargetFramework.Libraries.FirstOrDefault(library =>
-                                        library.Name == dependency.Name);
+                            var projectLibrary =
+                                lockFileTargetFramework.Libraries.FirstOrDefault(library =>
+                                    library.Name == dependency.Name);
 
-                                ReportDependency(projectLibrary, lockFileTargetFramework, 1);
-                            }
+                            ReportDependency(options, projectLibrary, lockFileTargetFramework, indentLevel + 1);
                         }
                     }
                 }
             }
+        }
+
+        private static string GetIndent(CommandLineOptions options, int level)
+        {
+            return options.Format == OutputFormat.Nested
+                ? "".PadLeft(level * IndentWidth, ' ')
+                : "";
+        }
+
+        static void HandleArgsError(IEnumerable<Error> errors)
+        {
+            var result = -2;
+            Console.WriteLine("errors {0}", errors.Count());
+            if (errors.Any(x => x is HelpRequestedError || x is VersionRequestedError))
+                result = -1;
+            Console.WriteLine("Exit code {0}", result);
         }
 
         private static bool ShowHelp(string[] args)
@@ -75,22 +119,42 @@ Note that existing project.assets.json files will be used if present in a projec
             return false;
         }
 
-        private static bool IncludeDependency(string name)
+        private static bool IncludeProject(CommandLineOptions options, string name)
+            => Include(name, options.ProjectIncludeFilter, options.ProjectExcludeFilter);
+
+
+        private static bool IncludePackage(CommandLineOptions options, string name) 
+            => Include(name, options.PackageIncludeFilter, options.PackageExcludeFilter);
+
+        private static bool Include(string name, IEnumerable<string> includeFilter, IEnumerable<string> excludeFilter)
         {
-            bool ignore = IgnoredPrefixes.Any(prefix => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
-            return !ignore;
+            bool included = !includeFilter.Any() ||
+                               includeFilter.Any(prefix => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+            if (!included)
+            {
+                return false;
+            }
+
+            bool excluded = excludeFilter.Any() &&
+                            excludeFilter.Any(prefix => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+            if (excluded)
+            {
+                return false;
+            }
+            return true;
         }
 
-        private static void ReportDependency(LockFileTargetLibrary projectLibrary, LockFileTarget lockFileTargetFramework, int indentLevel)
+        private static void ReportDependency(CommandLineOptions options,
+            LockFileTargetLibrary projectLibrary, LockFileTarget lockFileTargetFramework, int indentLevel)
         {
             Console.Write(new String(' ', indentLevel * 2));
             Console.WriteLine($"{projectLibrary.Name}, v{projectLibrary.Version}");
 
-            foreach (var childDependency in projectLibrary.Dependencies.Where(x => IncludeDependency(x.Id)))
+            foreach (var childDependency in projectLibrary.Dependencies.Where(x => IncludePackage(options, x.Id)))
             {
                 var childLibrary = lockFileTargetFramework.Libraries.FirstOrDefault(library => string.Equals(library.Name, childDependency.Id, StringComparison.OrdinalIgnoreCase));
 
-                ReportDependency(childLibrary, lockFileTargetFramework, indentLevel + 1);
+                ReportDependency(options, childLibrary, lockFileTargetFramework, indentLevel + 1);
             }
         }
     }

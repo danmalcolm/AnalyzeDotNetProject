@@ -2,7 +2,7 @@
   "profiles": {
     "AnalyzeDotNetProject": {
       "commandName": "Project",
-      "commandLineArgs": "\"C:\\Dev\\Azure DevOps\\OrcHack\\src\\Orchestration\\BluePrism.OrcHack.Orchestration.API\\Orchestration.API.csproj\" \"System.,Microsoft.\""
+      "commandLineArgs": "--level Project --projects \"C:\\Dev\\MyTestProject.csproj\" --projectexcludefilter AnotherProject.Exclude --packageincludefilter Level1. --packageexcludefilter Level1.Level2"
     }
   }
 }
